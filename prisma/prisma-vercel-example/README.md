@@ -1,6 +1,6 @@
 # Run TiDB Serverless with Prisma on Vercel Edge functions
 
-This repo is an example of how to run TiDB Serverless with Prisma on Vercel Edge functions
+This repo is an example of how to run TiDB Serverless with our [prisma adapter](https://github.com/tidbcloud/prisma-adapter) on Vercel Edge functions
 
 ## How to run this example
 
