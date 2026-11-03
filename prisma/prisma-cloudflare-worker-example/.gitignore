@@ -94,7 +94,7 @@ web_modules/
 
 # dotenv environment variable files
 
-.env
+.env*
 .env.development.local
 .env.test.local
 .env.production.local
@@ -168,6 +168,6 @@ dist
 
 # wrangler project
 
-.dev.vars
+.dev.vars*
 .wrangler/
 .idea
