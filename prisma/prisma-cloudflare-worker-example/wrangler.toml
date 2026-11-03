@@ -49,5 +49,4 @@ compatibility_date = "2024-03-12"
 # [[migrations]]
 # tag = "v1"
 # new_classes = ["MyDurableObject"]
-[vars]
-DATABASE_URL = "mysql://<user>:<password>@<host>:4000/<database>?sslaccept=strict"
+# Set DATABASE_URL and API_AUTH_TOKEN with `wrangler secret put`, never [vars].

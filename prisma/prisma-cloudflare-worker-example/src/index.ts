@@ -10,6 +10,7 @@
 import {connect} from "@tidbcloud/serverless";
 import { PrismaTiDBCloud } from '@tidbcloud/prisma-adapter';
 import { PrismaClient } from '@prisma/client'
+import { authenticate } from './auth';
 
 export interface Env {
 	// Example binding to KV. Learn more at https://developers.cloudflare.com/workers/runtime-apis/kv/
@@ -26,11 +27,18 @@ export interface Env {
 	//
 	// Example binding to a Queue. Learn more at https://developers.cloudflare.com/queues/javascript-apis/
 	// MY_QUEUE: Queue;
-	 DATABASE_URL: string
+	DATABASE_URL: string
+	API_AUTH_TOKEN: string
 }
 
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+		const denied = await authenticate(request, env.API_AUTH_TOKEN);
+		if (denied) return denied;
+		if (!env.DATABASE_URL) {
+			return new Response('Service unavailable', { status: 503, headers: { 'Cache-Control': 'no-store' } });
+		}
+
 		const config = {
 			url: env.DATABASE_URL,
 		}
@@ -43,10 +51,8 @@ export default {
 		await prisma.log.create({
 			data: {
 				level: 'Info',
-				message: `${request.method} ${request.url}`,
-				meta: {
-					headers: JSON.stringify(request.headers),
-				},
+				message: `${request.method} ${new URL(request.url).pathname}`,
+				meta: {},
 			},
 		})
 
@@ -57,8 +63,8 @@ export default {
 			},
 		})
 
-		console.log(JSON.stringify(logs))
-
-		return new Response(JSON.stringify(logs))
+		return new Response(JSON.stringify(logs), {
+			headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+		})
 	},
 };
