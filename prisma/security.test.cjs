@@ -1,10 +1,9 @@
 // Run from either example with npm test. Database calls are mocked; Web Crypto is real.
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
+const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
 const { createRequire } = require('node:module');
 const path = require('node:path');
 const { test } = require('node:test');
-const vm = require('node:vm');
 
 const worker = process.argv[2] === 'worker';
 const project = path.join(__dirname, worker ? 'prisma-cloudflare-worker-example' : 'prisma-vercel-example');
@@ -12,9 +11,25 @@ const projectRequire = createRequire(path.join(project, 'package.json'));
 const ts = projectRequire('typescript');
 const token = 'a'.repeat(64);
 
-function harness(overrides = {}) {
+function harness(t, overrides = {}) {
   const env = { API_AUTH_TOKEN: token, DATABASE_URL: 'mock-database-url', ...overrides };
+  // These tests run sequentially; restore environment and mocks after each test.
+  if (!worker) {
+    const previous = {};
+    for (const key of Object.keys(env)) previous[key] = process.env[key];
+    t.after(() => {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
   const calls = { connections: 0, clients: 0, writes: [], reads: 0, logs: [] };
+  t.mock.method(console, 'log', (...args) => calls.logs.push(args));
   const rows = [{ id: 1 }];
   const mocks = {
     '@tidbcloud/serverless': { connect: () => { calls.connections++; return {}; } },
@@ -30,29 +45,35 @@ function harness(overrides = {}) {
       }
     } },
   };
-  if (!worker) mocks['next/server'] = projectRequire('next/server');
+  for (const [name, exports] of Object.entries(mocks)) {
+    const filename = projectRequire.resolve(name);
+    const previous = require.cache[filename];
+    t.after(() => {
+      if (previous === undefined) delete require.cache[filename];
+      else require.cache[filename] = previous;
+    });
+    require.cache[filename] = { id: filename, filename, loaded: true, exports };
+  }
 
-  function load(filename) {
+  // Compile trusted repository files to disk and use normal CommonJS loading.
+  // Keep the directory under the project so dependencies resolve normally.
+  const compiled = mkdtempSync(path.join(project, '.security-test-'));
+  t.after(() => {
+    for (const name of ['auth.js', 'entry.js']) delete require.cache[path.join(compiled, name)];
+    rmSync(compiled, { recursive: true, force: true });
+  });
+  const sourceDirectory = path.join(project, worker ? 'src' : 'app/api/edge');
+  for (const [input, output] of [['auth.ts', 'auth.js'], [worker ? 'index.ts' : 'route.ts', 'entry.js']]) {
+    const filename = path.join(sourceDirectory, input);
     const source = ts.transpileModule(readFileSync(filename, 'utf8'), {
       compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 },
     }).outputText;
-    const module = { exports: {} };
-    const localRequire = (name) => {
-      if (name === './auth') return load(path.join(path.dirname(filename), 'auth.ts'));
-      assert.ok(name in mocks, `Unexpected dependency: ${name}`);
-      return mocks[name];
-    };
-    const evaluate = vm.runInNewContext(`(function(require, module, exports) { ${source}\n})`, {
-      Request, Response, URL, TextEncoder, crypto: globalThis.crypto,
-      process: { env }, console: { log: (...args) => calls.logs.push(args) },
-    }, { filename });
-    evaluate(localRequire, module, module.exports);
-    return module.exports;
+    writeFileSync(path.join(compiled, output), source);
   }
 
-  const entry = load(path.join(project, worker ? 'src/index.ts' : 'app/api/edge/route.ts'));
+  const entry = require(path.join(compiled, 'entry.js'));
   return {
-    calls, env,
+    calls, env: worker ? env : process.env,
     async request(authorization, url = 'https://example.test/api/edge', headers = {}) {
       if (authorization !== undefined) headers.Authorization = authorization;
       const request = new Request(url, { headers });
@@ -75,8 +96,8 @@ for (const [label, authorization] of [
   ['prefix', `Bearer x${token}`], ['suffix', `Bearer ${token}x`],
   ['embedded whitespace', `Bearer ${token.slice(0, 32)} ${token.slice(32)}`],
 ]) {
-  test(`${label} credential returns 401 before any database access`, async () => {
-    const h = harness();
+  test(`${label} credential returns 401 before any database access`, async (t) => {
+    const h = harness(t);
     const response = await h.request(authorization);
     assert.equal(response.status, 401);
     assert.equal(response.headers.get('WWW-Authenticate'), 'Bearer');
@@ -85,8 +106,8 @@ for (const [label, authorization] of [
   });
 }
 
-test('query parameters and cookies cannot supply the credential', async () => {
-  const h = harness();
+test('query parameters and cookies cannot supply the credential', async (t) => {
+  const h = harness(t);
   const response = await h.request(undefined, `https://example.test/?token=${token}&API_AUTH_TOKEN=${token}`, {
     Cookie: `API_AUTH_TOKEN=${token}`, 'X-API-Key': token,
   });
@@ -95,8 +116,8 @@ test('query parameters and cookies cannot supply the credential', async () => {
 });
 
 for (const value of [undefined, '', 'too-short', ' '.repeat(64)]) {
-  test(`unconfigured or weak token (${JSON.stringify(value)}) fails closed`, async () => {
-    const h = harness({ API_AUTH_TOKEN: value });
+  test(`unconfigured or weak token (${JSON.stringify(value)}) fails closed`, async (t) => {
+    const h = harness(t, { API_AUTH_TOKEN: value });
     const response = await h.request(`Bearer ${token}`);
     assert.equal(response.status, 503);
     assert.equal(response.headers.get('Cache-Control'), 'no-store');
@@ -104,16 +125,16 @@ for (const value of [undefined, '', 'too-short', ' '.repeat(64)]) {
   });
 }
 
-test('missing database configuration fails closed', async () => {
-  const h = harness({ DATABASE_URL: undefined });
+test('missing database configuration fails closed', async (t) => {
+  const h = harness(t, { DATABASE_URL: undefined });
   const response = await h.request(`Bearer ${token}`);
   assert.equal(response.status, 503);
   assertNoDatabase(h.calls);
 });
 
 for (const scheme of ['Bearer', 'bearer']) {
-  test(`${scheme} authentication allows the database operation without caching or logging secrets`, async () => {
-    const h = harness();
+  test(`${scheme} authentication allows the database operation without caching or logging secrets`, async (t) => {
+    const h = harness(t);
     const response = await h.request(`${scheme} ${token}`, `https://example.test/api/edge?token=${token}`, {
       Cookie: `session=${token}`,
     });
@@ -133,8 +154,8 @@ for (const scheme of ['Bearer', 'bearer']) {
   });
 }
 
-test('rotating the configured token rejects the old token', async () => {
-  const h = harness();
+test('rotating the configured token rejects the old token', async (t) => {
+  const h = harness(t);
   assert.equal((await h.request(`Bearer ${token}`)).status, 200);
   h.env.API_AUTH_TOKEN = 'b'.repeat(64);
   assert.equal((await h.request(`Bearer ${token}`)).status, 401);
