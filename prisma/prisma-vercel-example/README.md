@@ -24,7 +24,9 @@ API_AUTH_TOKEN="<paste a newly generated token here>"
 
 Generate the token with `openssl rand -hex 32`. It must contain at least 32 non-whitespace characters. Keep `.env` private and untracked. Never prefix either variable with `NEXT_PUBLIC_` or embed the values in source code.
 
-`GET /api/edge` authenticates one trusted service identity using `Authorization: Bearer <token>`. Anyone holding this token can read the `User` table. It is for trusted server-to-server callers, not a multi-user application: it does not provide per-user identity or data isolation. Do not embed the token in browser JavaScript or pass credentials in URLs. The static welcome page remains public. Use HTTPS outside local development.
+`GET /api/edge` authenticates one trusted service identity using `Authorization: Bearer <token>`. Anyone holding this token can read up to 20 user IDs, ordered by descending ID. The query explicitly selects only `id`; it does not return email addresses or names. This is a fixed sample, with no pagination or client-controlled query options. It is for trusted server-to-server callers, not a multi-user application: it does not provide per-user identity or data isolation. Do not embed the token in browser JavaScript or pass credentials in URLs. The static welcome page remains public. Use HTTPS outside local development.
+
+Before adapting this example for individual users, add verified user/tenant identities and scope database queries to the records each identity is authorized to access. Configure rate limits at the deployment boundary as needed for your workload.
 
 Missing or invalid credentials return 401 before any database access. A missing/short token or missing database URL fails closed with 503. API responses use `Cache-Control: no-store` and the route is forced dynamic.
 
@@ -79,7 +81,7 @@ Use a dedicated database account with only `SELECT` on the `User` table; use a s
 
 ### 6. Test
 
-Run `npm test` on Node.js 22 or later. Tests compile local TypeScript files to temporary CommonJS modules, mock the database through the module cache, and exercise the real entry point and Web Crypto, including rejected requests without database access, successful requests, and token rotation. Temporary files, module mocks, and environment changes are cleaned up after each test.
+Run `npm test` on Node.js 22 or later. Tests compile local TypeScript files to temporary CommonJS modules, mock the database through the module cache, and exercise the real entry point and Web Crypto, including rejected requests without database access, successful requests, and token rotation. They also assert that the Prisma query selects only IDs and limits results to 20, even when request query parameters try to expand access. Temporary files, module mocks, and environment changes are cleaned up after each test.
 
 ## How this example built
 

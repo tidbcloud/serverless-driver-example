@@ -28,7 +28,7 @@ function harness(t, overrides = {}) {
       else process.env[key] = value;
     }
   }
-  const calls = { connections: 0, clients: 0, writes: [], reads: 0, logs: [] };
+  const calls = { connections: 0, clients: 0, writes: [], reads: 0, userQueries: [], logs: [] };
   t.mock.method(console, 'log', (...args) => calls.logs.push(args));
   const rows = [{ id: 1 }];
   const mocks = {
@@ -41,7 +41,11 @@ function harness(t, overrides = {}) {
           create: async (args) => { calls.writes.push(args.data); },
           findMany: async () => { calls.reads++; return rows; },
         };
-        this.user = { findMany: async () => { calls.reads++; return rows; } };
+        this.user = { findMany: async (args) => {
+          calls.reads++;
+          calls.userQueries.push(args);
+          return rows;
+        } };
       }
     } },
   };
@@ -163,3 +167,20 @@ test('rotating the configured token rejects the old token', async (t) => {
   assert.equal((await h.request(`Bearer ${h.env.API_AUTH_TOKEN}`)).status, 200);
   assert.equal(h.calls.connections, 2);
 });
+
+if (!worker) {
+  test('user reads select only IDs and enforce a fixed result limit', async (t) => {
+    const h = harness(t);
+    for (const query of ['', '?take=100000&skip=20&cursor=1&select=email,name&include=email']) {
+      const response = await h.request(`Bearer ${token}`, `https://example.test/api/edge${query}`);
+      assert.equal(response.status, 200);
+      assert.deepEqual(h.calls.userQueries.at(-1), {
+        select: { id: true },
+        take: 20,
+        orderBy: { id: 'desc' },
+      });
+      assert.deepEqual(await response.json(), [{ id: 1 }]);
+    }
+    assert.equal(h.calls.userQueries.length, 2);
+  });
+}
