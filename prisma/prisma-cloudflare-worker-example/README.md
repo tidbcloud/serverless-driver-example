@@ -66,7 +66,7 @@ Use a dedicated database account limited to the example's `Log` table; use a sep
 
 ### 6. Test
 
-Run `npm test` on Node.js 22 or later. Tests mock the database and exercise the real entry point and Web Crypto, including rejected requests without database access, successful requests, and token rotation.
+Run `npm test` on Node.js 22 or later. Tests compile local TypeScript files to temporary CommonJS modules, mock the database through the module cache, and exercise the real entry point and Web Crypto, including rejected requests without database access, successful requests, and token rotation. Temporary files, module mocks, and environment changes are cleaned up after each test.
 
 ## How this example built
 
