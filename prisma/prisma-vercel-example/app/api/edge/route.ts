@@ -20,7 +20,12 @@ export async function GET(request: NextRequest) {
   const adapter = new PrismaTiDBCloud(connection);
   const prisma = new PrismaClient({ adapter });
 
-  const users = await prisma.user.findMany()
+  // Demonstrate a bounded read without exposing names or email addresses.
+  const users = await prisma.user.findMany({
+    select: { id: true },
+    take: 20,
+    orderBy: { id: 'desc' },
+  })
 
   return NextResponse.json(users, { status: 200, headers: { 'Cache-Control': 'no-store' } })
 }
